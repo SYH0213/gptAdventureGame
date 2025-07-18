@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPT Adventure Game</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+        .container { max-width: 800px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        #game-output { border: 1px solid #ddd; padding: 15px; min-height: 300px; max-height: 500px; overflow-y: auto; margin-bottom: 15px; background-color: #e9e9e9; border-radius: 5px; }
+        #user-input { width: calc(100% - 100px); padding: 10px; border: 1px solid #ddd; border-radius: 5px; margin-right: 10px; }
+        #send-button, #reset-button, #start-game-button { padding: 10px 15px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; margin-bottom: 5px; }
+        #send-button:hover, #reset-button:hover, #start-game-button:hover { background-color: #0056b3; }
+        #send-button:disabled, #user-input:disabled { background-color: #cccccc; cursor: not-allowed; }
+        .button-group { display: flex; justify-content: flex-end; margin-top: 10px; }
+        .button-group button { margin-left: 10px; }
+        #player-stats { border: 1px solid #ddd; padding: 15px; margin-top: 20px; background-color: #f9f9f9; border-radius: 5px; }
+        #player-stats h3 { margin-top: 0; color: #007bff; }
+        #player-stats ul { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; }
+        #player-stats ul li { margin-right: 20px; margin-bottom: 5px; }
+        #player-inventory { margin-top: 10px; }
+        #player-inventory ul { list-style: disc; margin-left: 20px; }
+
+        #story-selection-screen { text-align: center; padding: 50px 0; }
+        #story-input { width: 80%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; margin-bottom: 10px; }
+        .hidden { display: none; }
+        #loading-message { margin-top: 10px; font-weight: bold; color: #007bff; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>GPT Adventure Game</h1>
+
+        <div id="story-selection-screen">
+            <h2>새로운 게임 시작</h2>
+            <p>어떤 스토리의 게임을 플레이하고 싶으신가요? 간략하게 설명해주세요.</p>
+            <textarea id="story-input" rows="5" placeholder="예: 드래곤에게 납치된 공주를 구하는 기사의 모험, 마법 학교에서 벌어지는 미스터리 사건..."></textarea><br>
+            <button id="start-game-button">게임 시작</button>
+        </div>
+
+        <div id="game-play-screen" class="hidden">
+            <div id="game-output"></div>
+            <input type="text" id="user-input" placeholder="당신의 행동을 입력하세요...">
+            <button id="send-button">전송</button>
+            <div class="button-group">
+                <button id="reset-button">게임 초기화</button>
+            </div>
+
+            <div id="player-stats">
+                <h3>플레이어 상태</h3>
+                <ul id="stats-list">
+                    <li>위치: <span id="stat-location"></span></li>
+                    <li>체력: <span id="stat-health"></span>/<span id="stat-max_health"></span></li>
+                    <li>공격력: <span id="stat-attack"></span></li>
+                    <li>방어력: <span id="stat-defense"></span></li>
+                    <li>레벨: <span id="stat-level"></span></li>
+                    <li>경험치: <span id="stat-experience"></span></li>
+                    <li>현재 목표: <span id="stat-current_goal"></span></li>
+                </ul>
+                <div id="player-inventory">
+                    <h4>인벤토리</h4>
+                    <ul id="inventory-list"></ul>
+                </div>
+                <div id="player-status-effects">
+                    <h4>상태 효과</h4>
+                    <ul id="status-effects-list"></ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const storySelectionScreen = document.getElementById('story-selection-screen');
+        const gamePlayScreen = document.getElementById('game-play-screen');
+        const storyInput = document.getElementById('story-input');
+        const startGameButton = document.getElementById('start-game-button');
+
+        const gameOutput = document.getElementById('game-output');
+        const userInput = document.getElementById('user-input');
+        const sendButton = document.getElementById('send-button');
+        const resetButton = document.getElementById('reset-button');
+
+        const statsList = document.getElementById('stats-list');
+        const inventoryList = document.getElementById('inventory-list');
+        const statusEffectsList = document.getElementById('status-effects-list');
+        const currentGoalSpan = document.getElementById('stat-current_goal'); // 새로 추가
+
+        function appendMessage(sender, message) {
+            const p = document.createElement('p');
+            p.innerHTML = `<strong>${sender}:</strong> ${message}`;
+            gameOutput.appendChild(p);
+            gameOutput.scrollTop = gameOutput.scrollHeight; // Scroll to bottom
+        }
+
+        function updatePlayerStats(stats) {
+            document.getElementById('stat-location').textContent = stats.location;
+            document.getElementById('stat-health').textContent = stats.health;
+            document.getElementById('stat-max_health').textContent = stats.max_health;
+            document.getElementById('stat-attack').textContent = stats.attack;
+            document.getElementById('stat-defense').textContent = stats.defense;
+            document.getElementById('stat-level').textContent = stats.level;
+            document.getElementById('stat-experience').textContent = stats.experience;
+            currentGoalSpan.textContent = stats.current_goal || '없음'; // 목표 업데이트
+
+            // 인벤토리 업데이트
+            inventoryList.innerHTML = '';
+            if (stats.inventory && stats.inventory.length > 0) {
+                stats.inventory.forEach(item => {
+                    const li = document.createElement('li');
+                    li.textContent = item;
+                    inventoryList.appendChild(li);
+                });
+            } else {
+                const li = document.createElement('li');
+                li.textContent = '없음';
+                inventoryList.appendChild(li);
+            }
+
+            // 상태 효과 업데이트
+            statusEffectsList.innerHTML = '';
+            if (stats.status_effects && stats.status_effects.length > 0) {
+                stats.status_effects.forEach(effect => {
+                    const li = document.createElement('li');
+                    li.textContent = effect;
+                    statusEffectsList.appendChild(li);
+                });
+            } else {
+                const li = document.createElement('li');
+                li.textContent = '없음';
+                statusEffectsList.appendChild(li);
+            }
+        }
+
+        function setGameActive(isActive) {
+            userInput.disabled = !isActive;
+            sendButton.disabled = !isActive;
+            if (!isActive) {
+                userInput.placeholder = "게임이 종료되었습니다. 초기화 버튼을 눌러 다시 시작하세요.";
+            } else {
+                userInput.placeholder = "당신의 행동을 입력하세요...";
+            }
+        }
+
+        async function startGame() {
+            const userStory = storyInput.value.trim();
+            if (!userStory) {
+                alert('시작하고 싶은 스토리를 입력해주세요!');
+                return;
+            }
+
+            startGameButton.disabled = true;
+            storyInput.disabled = true;
+
+            // 즉시 게임 플레이 화면으로 전환
+            storySelectionScreen.classList.add('hidden');
+            gamePlayScreen.classList.remove('hidden');
+            gameOutput.innerHTML = ''; // 기존 메시지 초기화
+            appendMessage('게임 마스터', '스토리 생성 중... 잠시만 기다려 주세요.');
+            setGameActive(true); // 게임 시작 시 활성화
+
+            try {
+                const response = await fetch('/select_story', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ user_story_description: userStory })
+                });
+                const data = await response.json();
+                if (data.error) {
+                    gameOutput.innerHTML = '';
+                    appendMessage('게임 마스터', `오류: ${data.error}`);
+                    setGameActive(false); // 오류 시 비활성화
+                } else {
+                    gameOutput.innerHTML = '';
+                    appendMessage('게임 마스터', data.initial_narrative);
+                    updatePlayerStats(data.player_state);
+                }
+            } catch (error) {
+                gameOutput.innerHTML = '';
+                appendMessage('게임 마스터', `통신 오류: ${error.message}`);
+                setGameActive(false); // 통신 오류 시 비활성화
+            } finally {
+                startGameButton.disabled = false;
+                storyInput.disabled = false;
+            }
+        }
+
+        async function sendMessage() {
+            const input = userInput.value.trim();
+            if (!input) return;
+
+            appendMessage('당신', input);
+            userInput.value = '';
+
+            try {
+                const response = await fetch('/play', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ action: input })
+                });
+                const data = await response.json();
+                if (data.error) {
+                    appendMessage('게임 마스터', `오류: ${data.error}`);
+                } else {
+                    appendMessage('게임 마스터', data.response);
+                    if (data.player_state) {
+                        updatePlayerStats(data.player_state);
+                    }
+                    // 게임 종료 여부 확인
+                    if (data.game_over) {
+                        appendMessage('게임 마스터', `--- 게임 종료 ---\n${data.game_over_narrative}`);
+                        setGameActive(false); // 게임 종료 시 비활성화
+                    }
+                }
+            } catch (error) {
+                appendMessage('게임 마스터', `통신 오류: ${error.message}`);
+            }
+        }
+
+        async function resetGame() {
+            if (!confirm('정말로 게임을 초기화하시겠습니까?')) {
+                return;
+            }
+            try {
+                const response = await fetch('/reset', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                if (data.status === 'success') {
+                    gameOutput.innerHTML = ''; // Clear output
+                    appendMessage('게임 마스터', '게임이 초기화되었습니다. 새로운 모험을 시작하세요!');
+                    updatePlayerStats(data.player_state); // 초기 상태로 업데이트
+
+                    // 스토리 선택 화면으로 돌아가기
+                    gamePlayScreen.classList.add('hidden');
+                    storySelectionScreen.classList.remove('hidden');
+                    storyInput.value = ''; // 입력 필드 초기화
+                    startGameButton.disabled = false;
+                    storyInput.disabled = false;
+                    setGameActive(true); // 리셋 시 다시 활성화
+                } else {
+                    appendMessage('게임 마스터', `초기화 오류: ${data.error}`);
+                }
+            } catch (error) {
+                appendMessage('게임 마스터', `통신 오류: ${error.message}`);
+            }
+        }
+
+        startGameButton.addEventListener('click', startGame);
+        sendButton.addEventListener('click', sendMessage);
+        userInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+        resetButton.addEventListener('click', resetGame);
+
+    </script>
+</body>
+</html>
