@@ -32,7 +32,8 @@
             box-sizing: border-box;
         }
         .hidden { display: none; }
-        #start-game-button { width: 100%; padding: 12px; font-size: 16px; }
+        #start-game-button, #load-game-button { width: 49%; padding: 12px; font-size: 16px; }
+        .start-button-group { display: flex; justify-content: space-between; }
     </style>
 </head>
 <body>
@@ -43,6 +44,7 @@
             <h2>새로운 게임 시작</h2>
             <p>아래 설정을 변경하여 자신만의 모험을 만들어보세요!</p>
 
+            <!-- 설정 그룹들... (기존과 동일) -->
             <div class="setting-group">
                 <label for="gm-personality-select">게임 마스터(GM) 성격</label>
                 <select id="gm-personality-select">
@@ -101,7 +103,11 @@
                 <textarea id="story-input" rows="4" placeholder="예: 당신은 기억을 잃은 채, 축축하고 어두운 동굴 안에서 눈을 뜹니다..."></textarea>
             </div>
 
-            <button id="start-game-button">게임 시작</button>
+            <div class="start-button-group">
+                <button id="start-game-button">새로운 게임 시작</button>
+                <button id="load-game-button">불러오기</button>
+            </div>
+            <input type="file" id="load-file-input" class="hidden" accept=".json">
         </div>
 
         <div id="game-play-screen" class="hidden">
@@ -109,6 +115,7 @@
             <input type="text" id="user-input" placeholder="당신의 행동을 입력하세요...">
             <button id="send-button">전송</button>
             <div class="button-group">
+                <button id="save-game-button">게임 저장</button>
                 <button id="reset-button">게임 초기화</button>
             </div>
 
@@ -325,7 +332,11 @@
                     // 설정 필드 초기화
                     document.querySelectorAll('#story-selection-screen select').forEach(s => s.selectedIndex = 0);
                     document.querySelectorAll('#story-selection-screen input[type="text"], #story-selection-screen textarea').forEach(i => i.value = '');
-                    document.querySelectorAll('.setting-group input[type="text"]').forEach(i => i.classList.add('hidden'));
+                    // '기타' 입력 필드만 숨김
+                    gmPersonalityOther.classList.add('hidden');
+                    difficultyOther.classList.add('hidden');
+                    genreOther.classList.add('hidden');
+                    playerRoleOther.classList.add('hidden');
 
                     gamePlayScreen.classList.add('hidden');
                     storySelectionScreen.classList.remove('hidden');
@@ -345,6 +356,92 @@
             if (e.key === 'Enter') sendMessage();
         });
         resetButton.addEventListener('click', resetGame);
+
+        // --- 저장 및 불러오기 기능 ---
+        const saveGameButton = document.getElementById('save-game-button');
+        const loadGameButton = document.getElementById('load-game-button');
+        const loadFileInput = document.getElementById('load-file-input');
+
+        // "게임 저장" 버튼 클릭 시
+        saveGameButton.addEventListener('click', async () => {
+            try {
+                const response = await fetch('/get_save_data');
+                const data = await response.json();
+
+                if (data.error) {
+                    alert(`저장 실패: ${data.error}`);
+                    console.error("Save Error:", data.error); // 콘솔에 오류 출력
+                    return;
+                }
+
+                // 받은 데이터를 Blob으로 변환하여 다운로드 링크 생성
+                const dataStr = JSON.stringify(data, null, 2);
+                const dataBlob = new Blob([dataStr], {type: "application/json"});
+                const url = URL.createObjectURL(dataBlob);
+                
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'adventure_save.json'; // 저장될 파일 이름
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+
+            } catch (error) {
+                alert(`저장 중 오류 발생: ${error.message}`);
+                console.error("Save Catch Error:", error); // 콘솔에 오류 출력
+            }
+        });
+
+        // "불러오기" 버튼 클릭 시 숨겨진 파일 입력창 실행
+        loadGameButton.addEventListener('click', () => {
+            loadFileInput.click();
+        });
+
+        // 사용자가 저장 파일을 선택했을 때
+        loadFileInput.addEventListener('change', async (event) => {
+            const file = event.target.files[0];
+            if (!file) {
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('save_file', file);
+
+            // 로딩 메시지 표시 및 화면 전환
+            storySelectionScreen.classList.add('hidden');
+            gamePlayScreen.classList.remove('hidden');
+            gameOutput.innerHTML = '';
+            appendMessage('게임 마스터', '저장된 모험을 불러오는 중입니다... 잠시만 기다려 주세요.');
+            setGameActive(false);
+
+            try {
+                const response = await fetch('/load_game', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+
+                if (data.error) {
+                    alert(`불러오기 실패: ${data.error}`);
+                    console.error("Load Error:", data.error); // 콘솔에 오류 출력
+                    gamePlayScreen.classList.add('hidden');
+                    storySelectionScreen.classList.remove('hidden');
+                } else {
+                    gameOutput.innerHTML = ''; // 이전 로딩 메시지 삭제
+                    appendMessage('게임 마스터', data.loaded_narrative);
+                    updatePlayerStats(data.player_state);
+                    setGameActive(true);
+                }
+            } catch (error) {
+                alert(`불러오기 중 오류 발생: ${error.message}`);
+                console.error("Load Catch Error:", error); // 콘솔에 오류 출력
+                gamePlayScreen.classList.add('hidden');
+                storySelectionScreen.classList.remove('hidden');
+            }
+            // 파일 입력 값을 초기화하여 동일한 파일을 다시 선택할 수 있도록 함
+            event.target.value = null;
+        });
 
     </script>
 </body>

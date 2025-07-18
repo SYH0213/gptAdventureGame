@@ -15,7 +15,20 @@ genai.configure(api_key=os.environ.get("GOOGLE_API_KEY"))
 
 # --- 글로벌 변수 ---
 # 게임의 핵심 상태를 관리합니다.
-player_state = {}
+DEFAULT_PLAYER_STATE = {
+    "location": "알 수 없는 곳",
+    "health": 100,
+    "max_health": 100,
+    "attack": 10,
+    "defense": 5,
+    "level": 1,
+    "experience": 0,
+    "inventory": [],
+    "status_effects": [],
+    "quest_progress": {},
+    "current_goal": ""
+}
+player_state = DEFAULT_PLAYER_STATE.copy()
 game_phase = "story_selection"
 game_chat_session = None # AI와의 대화 세션을 저장할 변수
 
@@ -104,12 +117,8 @@ def select_story():
 """
 
     # --- 게임 상태 초기화 ---
-    player_state = {
-        "location": "알 수 없는 곳", "health": 100, "max_health": 100,
-        "attack": 10, "defense": 5, "level": 1, "experience": 0,
-        "inventory": [], "status_effects": [], "quest_progress": {},
-        "current_goal": settings['game_goal']
-    }
+    player_state = DEFAULT_PLAYER_STATE.copy()
+    player_state["current_goal"] = settings['game_goal']
 
     try:
         # --- 새 대화 세션 시작 ---
@@ -205,11 +214,129 @@ def reset_game():
     """모든 게임 상태와 대화 세션을 초기화합니다."""
     global game_phase, player_state, game_chat_session
     
-    player_state = {}
+    player_state = DEFAULT_PLAYER_STATE.copy()
     game_phase = "story_selection"
     game_chat_session = None # 대화 세션 초기화
 
-    return jsonify({"status": "success", "message": "Game reset successfully."})
+    print(f"DEBUG: reset_game - Player state after reset: {player_state}")
+    return jsonify({"status": "success", "message": "Game reset successfully.", "player_state": player_state})
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+
+@app.route('/get_save_data', methods=['GET'])
+def get_save_data():
+    """현재 게임 상태와 대화 기록을 JSON으로 반환합니다."""
+    if game_phase != "playing" or not game_chat_session:
+        print(f"DEBUG: get_save_data - game_phase: {game_phase}, game_chat_session: {game_chat_session is not None}")
+        return jsonify({"error": "No active game to save."}), 400
+
+    try:
+        history_to_save = []
+        if game_chat_session and game_chat_session.history:
+            print(f"DEBUG: get_save_data - game_chat_session.history length: {len(game_chat_session.history)}")
+            for i, message in enumerate(game_chat_session.history):
+                try:
+                    # message.parts가 비어있을 경우를 대비하여 확인
+                    parts_text = [part.text for part in message.parts if hasattr(part, 'text')]
+                    history_to_save.append({
+                        "role": message.role,
+                        "parts": parts_text
+                    })
+                    print(f"DEBUG: get_save_data - Message {i} processed. Role: {message.role}, Parts length: {len(parts_text)}")
+                except Exception as part_e:
+                    print(f"ERROR: get_save_data - Failed to process message part {i}: {part_e}")
+                    # 문제가 있는 메시지는 건너뛰거나 기본값으로 처리
+                    history_to_save.append({"role": message.role, "parts": ["[Error: Corrupted message]"]})
+
+        save_data = {
+            "player_state": player_state,
+            "chat_history": history_to_save
+        }
+        print(f"DEBUG: get_save_data - Save data prepared. Player state keys: {player_state.keys()}, History length: {len(history_to_save)}")
+        return jsonify(save_data)
+    except Exception as e:
+        print(f"ERROR: get_save_data - Unexpected error: {e}")
+        return jsonify({"error": f"Failed to prepare save data: {e}"}), 500
+
+@app.route('/load_game', methods=['POST'])
+def load_game():
+    """업로드된 JSON 파일로 게임 상태와 대화 세션을 복원합니다."""
+    global game_phase, player_state, game_chat_session
+
+    if 'save_file' not in request.files:
+        return jsonify({"error": "No save file provided."}), 400
+
+    file = request.files['save_file']
+    if file.filename == '' or not file.filename.endswith('.json'):
+        return jsonify({"error": "Invalid file. Please upload a .json save file."}), 400
+
+    try:
+        save_data = json.load(file)
+        print(f"DEBUG: load_game - Received save data keys: {save_data.keys()}")
+        
+        # 데이터 유효성 검사
+        if "player_state" not in save_data or "chat_history" not in save_data:
+            print("ERROR: load_game - Invalid save file structure.")
+            return jsonify({"error": "Invalid save file structure."}), 400
+
+        # 게임 상태 복원
+        global player_state # 전역 변수임을 명시
+        player_state = save_data["player_state"]
+        print(f"DEBUG: load_game - Player state restored: {player_state}")
+        
+        # 대화 세션 복원
+        # 저장된 history를 genai.ChatSession이 요구하는 형식으로 재구성
+        history_from_save = []
+        for i, item in enumerate(save_data["chat_history"]):
+            try:
+                # parts가 리스트가 아닐 경우를 대비하여 확인
+                parts_list = item['parts'] if isinstance(item['parts'], list) else [item['parts']]
+                history_from_save.append({
+                    "role": item['role'],
+                    "parts": parts_list
+                })
+                print(f"DEBUG: load_game - History item {i} processed. Role: {item['role']}, Parts length: {len(parts_list)}")
+            except Exception as hist_e:
+                print(f"ERROR: load_game - Failed to process history item {i}: {hist_e}")
+                # 문제가 있는 기록은 건너뛰거나 기본값으로 처리
+                history_from_save.append({"role": item['role'], "parts": ["[Error: Corrupted history item]"]})
+
+        global game_chat_session # 전역 변수임을 명시
+        game_chat_session = model.start_chat(history=history_from_save)
+        game_phase = "playing"
+        print(f"DEBUG: load_game - Chat session restored with {len(history_from_save)} messages.")
+
+        # 복원된 마지막 대화 내용을 클라이언트에 전달
+        last_narrative = ""
+        if game_chat_session.history and game_chat_session.history[-1].role == "model":
+            # 마지막 메시지가 모델의 응답일 경우, 해당 내용을 파싱하여 전달
+            parsed_response = parse_gemini_response(game_chat_session.history[-1].parts[0].text)
+            last_narrative = parsed_response.get("narrative", "게임이 성공적으로 불러와졌습니다.")
+        else:
+            last_narrative = "게임이 성공적으로 불러와졌습니다. 이제 당신의 행동을 입력해주세요."
+
+        print(f"DEBUG: load_game - Sending response to client. Narrative length: {len(last_narrative)}")
+        return jsonify({
+            "status": "success",
+            "message": "Game loaded successfully!",
+            "loaded_narrative": last_narrative,
+            "player_state": player_state
+        })
+
+    except json.JSONDecodeError:
+        print("ERROR: load_game - Failed to decode save file. It might be corrupted.")
+        return jsonify({"error": "Failed to decode save file. It might be corrupted."}), 400
+    except Exception as e:
+        print(f"ERROR: load_game - Unexpected error: {e}")
+        return jsonify({"error": f"An unexpected error occurred while loading: {e}"}), 500
+
+# 전역 오류 핸들러: 처리되지 않은 모든 예외를 JSON 응답으로 변환
+@app.errorhandler(Exception)
+def handle_exception(e):
+    # 프로덕션 환경에서는 e.name, e.description 대신 일반적인 메시지를 사용
+    # 개발 환경에서는 디버깅을 위해 상세 정보를 포함할 수 있음
+    response = {"error": "An unexpected server error occurred.", "details": str(e)}
+    # HTTP 상태 코드 설정 (기본 500 Internal Server Error)
+    status_code = getattr(e, 'code', 500)
+    return jsonify(response), status_code
